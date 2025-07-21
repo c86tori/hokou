@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <title>歩行分析</title>
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+      background-color: white;
+      font-family: 'Segoe UI', 'Helvetica Neue', sans-serif;
+    }
+    canvas {
+      display: block;
+    }
+    #ui {
+      position: absolute;
+      top: 20px;
+      left: 20px;
+      z-index: 100;
+      background: rgba(255, 255, 255, 0.6);
+      border-radius: 16px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
+      backdrop-filter: blur(10px);
+      padding: 16px 20px;
+      color: #333;
+      max-width: 360px;
+    }
+    .slider-label {
+      display: block;
+      margin-top: 10px;
+      font-size: 13px;
+    }
+    .slider-wrapper {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    input[type=range] {
+      flex: 1;
+    }
+    .value-display {
+      width: 60px;
+      text-align: right;
+      font-size: 13px;
+    }
+    #ui button {
+      font-size: 14px;
+      padding: 8px 16px;
+      margin: 4px 8px 4px 0;
+      border: none;
+      border-radius: 8px;
+      background-color: #0078d4;
+      color: white;
+      cursor: pointer;
+      transition: background 0.3s ease;
+    }
+    #ui button:hover {
+      background-color: #005fa3;
+    }
+    #instructions {
+      margin-top: 15px;
+      font-size: 12px;
+      color: #666;
+      border-top: 1px solid rgba(0,0,0,0.1);
+      padding-top: 10px;
+    }
+  </style>
+</head>
+<body>
+
+  <div id="ui">
+    <button id="playPause">▶︎ 再生</button>
+
+    <label class="slider-label">速度:
+      <div class="slider-wrapper">
+        <input type="range" id="speed" min="0.1" max="2" step="0.1" value="1">
+        <span id="speedVal" class="value-display">1.0</span>
+      </div>
+    </label>
+
+    <div id="instructions">
+      <strong>マウス操作:</strong><br>
+      左クリック+ドラッグ: 回転<br>
+      右クリック+ドラッグ: パン（移動）<br>
+      ホイール: ズーム
+    </div>
+  </div>
+
+  <script type="module">
+    import * as THREE from './build/three.module.js';
+    import { FBXLoader } from './jsm/loaders/FBXLoader.js';
+
+    let mixer, action, modelObject = null;
+    let controls;
+
+    const width = window.innerWidth;
+    const height = window.innerHeight;
+    const aspect = width / height;
+    const zoomDefault = 720; // 初期値を720に変更
+
+    const camera = new THREE.OrthographicCamera(
+      -zoomDefault * aspect / 2,
+      zoomDefault * aspect / 2,
+      zoomDefault / 2,
+      -zoomDefault / 2,
+      0.1,
+      10000
+    );
+
+    const baseX = 1000;
+    const baseY = 100;
+    const baseZ = 500;
+    camera.position.set(baseX, baseY, baseZ);
+    camera.lookAt(0, 0, 0);
+
+    const scene = new THREE.Scene();
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(width, height);
+    renderer.setClearColor(0xffffff);
+    document.body.appendChild(renderer.domElement);
+
+    // カメラに追従するライト
+    const light = new THREE.DirectionalLight(0xffffff, 1);
+    scene.add(light);
+    scene.add(new THREE.AmbientLight(0x404040, 0.4));
+
+    // マウスコントロール用の変数
+    let isMouseDown = false;
+    let isRightClick = false;
+    let mouseX = 0;
+    let mouseY = 0;
+    let cameraRotationX = 0;
+    let cameraRotationY = 0;
+    let cameraDistance = 720; // 初期ズーム距離
+    let panX = 0;
+    let panY = 0;
+
+    // FBXファイルの読み込み
+    const loader = new FBXLoader();
+    loader.load('./StandardWalk.fbx', (object) => {
+      mixer = new THREE.AnimationMixer(object);
+      action = mixer.clipAction(object.animations[0]);
+      action.play();
+
+      object.scale.set(3, 3, 3);
+      object.position.set(98, -277, 0); // 初期位置を設定
+      modelObject = object;
+      scene.add(object);
+      
+      // FBX読み込み完了後にボタンの状態を更新
+      updatePlayPauseButton();
+    }, undefined, (error) => {
+      console.error('読み込み失敗:', error);
+    });
+
+    const clock = new THREE.Clock();
+
+    // マウスイベントリスナー
+    renderer.domElement.addEventListener('mousedown', onMouseDown);
+    renderer.domElement.addEventListener('mousemove', onMouseMove);
+    renderer.domElement.addEventListener('mouseup', onMouseUp);
+    renderer.domElement.addEventListener('wheel', onMouseWheel);
+    renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
+
+    function onMouseDown(event) {
+      isMouseDown = true;
+      isRightClick = event.button === 2;
+      mouseX = event.clientX;
+      mouseY = event.clientY;
+    }
+
+    function onMouseMove(event) {
+      if (!isMouseDown) return;
+
+      const deltaX = event.clientX - mouseX;
+      const deltaY = event.clientY - mouseY;
+
+      if (isRightClick) {
+        // 右クリック: パン（移動）
+        panX -= deltaX * 2;
+        panY += deltaY * 2;
+      } else {
+        // 左クリック: 回転
+        cameraRotationY += deltaX * 0.01;
+        cameraRotationX += deltaY * 0.01;
+        cameraRotationX = Math.max(-Math.PI/2, Math.min(Math.PI/2, cameraRotationX));
+      }
+
+      mouseX = event.clientX;
+      mouseY = event.clientY;
+    }
+
+    function onMouseUp(event) {
+      isMouseDown = false;
+      isRightClick = false;
+    }
+
+    function onMouseWheel(event) {
+      const zoomSpeed = 50;
+      cameraDistance += event.deltaY * zoomSpeed;
+      cameraDistance = Math.max(100, Math.min(5000, cameraDistance));
+    }
+
+    function updateCameraPosition() {
+      // マウス操作による回転とパンを適用
+      const radius = cameraDistance;
+      const x = radius * Math.cos(cameraRotationX) * Math.sin(cameraRotationY);
+      const y = radius * Math.sin(cameraRotationX);
+      const z = radius * Math.cos(cameraRotationX) * Math.cos(cameraRotationY);
+
+      camera.position.set(x + panX, y + panY, z);
+      camera.lookAt(panX, panY, 0);
+      
+      // ライトをカメラ位置に合わせて更新
+      light.position.copy(camera.position);
+      light.target.position.set(panX, panY, 0);
+      light.target.updateMatrixWorld();
+    }
+
+    function animate() {
+      requestAnimationFrame(animate);
+      const delta = clock.getDelta();
+      
+      // FBXアニメーションの更新
+      if (mixer && isPlaying) {
+        mixer.update(delta * animationSpeed);
+      }
+
+      // カメラ位置更新
+      updateCameraPosition();
+
+      // モデル位置は固定（初期位置のまま）
+
+      // ズーム処理（マウスホイールによる距離変更をカメラに反映）
+      const aspect = window.innerWidth / window.innerHeight;
+      camera.left = -cameraDistance * aspect / 2;
+      camera.right = cameraDistance * aspect / 2;
+      camera.top = cameraDistance / 2;
+      camera.bottom = -cameraDistance / 2;
+      camera.updateProjectionMatrix();
+
+      renderer.render(scene, camera);
+    }
+
+    animate();
+
+    // 再生・停止のトグル
+    let isPlaying = true;
+    const playPauseBtn = document.getElementById('playPause');
+    
+    function updatePlayPauseButton() {
+      if (isPlaying) {
+        playPauseBtn.textContent = '⏸ 停止';
+      } else {
+        playPauseBtn.textContent = '▶︎ 再生';
+      }
+    }
+    
+    playPauseBtn.addEventListener('click', () => {
+      isPlaying = !isPlaying;
+      
+      if (action) {
+        if (isPlaying) {
+          action.paused = false;
+          action.play();
+        } else {
+          action.paused = true;
+        }
+      }
+      
+      updatePlayPauseButton();
+    });
+
+    // スピード調整
+    let animationSpeed = 1.0;
+    document.getElementById('speed').addEventListener('input', (e) => {
+      const val = parseFloat(e.target.value);
+      animationSpeed = val;
+      if (action) action.setEffectiveTimeScale(val);
+      document.getElementById('speedVal').textContent = val.toFixed(1);
+    });
+
+    // 速度スライダーの初期値表示
+    document.getElementById('speedVal').textContent = '1.0';
+
+    // ウィンドウリサイズ対応
+    window.addEventListener('resize', () => {
+      const width = window.innerWidth;
+      const height = window.innerHeight;
+      const aspect = width / height;
+      camera.left = -cameraDistance * aspect / 2;
+      camera.right = cameraDistance * aspect / 2;
+      camera.top = cameraDistance / 2;
+      camera.bottom = -cameraDistance / 2;
+      camera.updateProjectionMatrix();
+      renderer.setSize(width, height);
+    });
+  </script>
+</body>
+</html>
